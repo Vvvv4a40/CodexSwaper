@@ -31,6 +31,8 @@ if (Test-Path -LiteralPath $Output) {
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:EnableCompressionInSingleFile=true `
+    -p:DebugType=None `
+    -p:DebugSymbols=false `
     -p:Platform=x64 `
     -o $Output
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
