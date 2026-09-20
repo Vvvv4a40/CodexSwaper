@@ -4,129 +4,12 @@ using CodexProfileOverlay.Core.Services;
 
 namespace CodexProfileOverlay.Tests;
 
-public sealed class CodexStatusParserTests
+public sealed class CodexAppServerRateLimitsParserTests
 {
-    private static readonly TimeZoneInfo Omsk = TimeZoneInfo.CreateCustomTimeZone(
-        "test-omsk",
-        TimeSpan.FromHours(6),
-        "test-omsk",
-        "test-omsk");
-
     [Fact]
-    public void StripTerminalControlSequences_RemovesAnsiAndBoxDrawing()
+    public void Parse_UsesStableProtocolResponse()
     {
-        string raw = "\u001b[32m╭────╮\u001b[0m\r\n│ 5h limit: 99% left (resets 21:48) │";
-
-        string sanitized = CodexStatusParser.StripTerminalControlSequences(raw);
-
-        Assert.DoesNotContain("\u001b", sanitized, StringComparison.Ordinal);
-        Assert.DoesNotContain("╭", sanitized, StringComparison.Ordinal);
-        Assert.Contains("5h limit: 99% left", sanitized, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Parse_SupportsFlexibleWhitespaceAndProgressBars()
-    {
-        UsageSnapshot snapshot = Parse("""
-              5h   limit:   █████████░  99% left (resets 21:48)
-            Weekly limit:   ▏          0% left (resets 14:04 on 9 Jul)
-            """);
-
-        Assert.Equal(2, snapshot.Windows.Count);
-        Assert.Equal(99, snapshot.Windows.Single(window => window.Name == "5h").RemainingPercent);
-        Assert.Equal(0, snapshot.Windows.Single(window => window.Name == "Weekly").RemainingPercent);
-    }
-
-    [Fact]
-    public void Parse_ConvertsResetTimeWithoutDateToWindowsLocalTime()
-    {
-        DateTimeOffset capturedAt = new(2026, 7, 5, 15, 0, 0, TimeSpan.Zero);
-
-        UsageSnapshot? snapshot = CodexStatusParser.Parse(
-            "5h limit: 99% left (resets 21:48)",
-            capturedAt,
-            "codex-cli 0.142.5",
-            Omsk);
-
-        DateTimeOffset reset = snapshot!.Windows.Single().ResetAt!.Value;
-        Assert.Equal(new DateTimeOffset(2026, 7, 5, 15, 48, 0, TimeSpan.Zero), reset);
-    }
-
-    [Fact]
-    public void Parse_ConvertsResetTimeWithDateToWindowsLocalTime()
-    {
-        DateTimeOffset capturedAt = new(2026, 7, 5, 10, 0, 0, TimeSpan.Zero);
-
-        UsageSnapshot snapshot = Parse("Weekly limit: 0% left (resets 14:04 on 9 Jul)", capturedAt);
-
-        Assert.Equal(new DateTimeOffset(2026, 7, 9, 8, 4, 0, TimeSpan.Zero), snapshot.Windows.Single().ResetAt);
-    }
-
-    [Fact]
-    public void Parse_UsesLowestWindowSoFreshShortWindowDoesNotHideWeeklyExhaustion()
-    {
-        UsageSnapshot snapshot = Parse("""
-            5h limit:      99% left (resets 21:48)
-            Weekly limit:   0% left (resets 14:04 on 9 Jul)
-            """);
-
-        Assert.Equal(0, UsageIntelligence.EffectiveRemainingPercent(snapshot));
-        Assert.Equal("🔴", ProfileIndicatorFormatter.FormatAutomatic(snapshot, true, 60, 25, snapshot.CapturedAt, TimeSpan.FromMinutes(90), false));
-    }
-
-    [Fact]
-    public void Parse_SupportsCodexDesktopCompactUsageMenuRows()
-    {
-        UsageSnapshot snapshot = Parse("""
-            Usage remaining 5%
-
-            5h        69%     9:58 PM
-            Weekly     5%     Jul 9
-            Upgrade to Pro
-            """);
-
-        Assert.Equal(2, snapshot.Windows.Count);
-        Assert.Equal(69, snapshot.Windows.Single(window => window.Name == "5h").RemainingPercent);
-        Assert.Equal(5, snapshot.Windows.Single(window => window.Name == "Weekly").RemainingPercent);
-        Assert.Equal("🔴", ProfileIndicatorFormatter.FormatAutomatic(snapshot, true, 60, 25, snapshot.CapturedAt, TimeSpan.FromMinutes(90), false));
-    }
-
-    [Fact]
-    public void Parse_DiscardsPrivacyFieldsAndStoresOnlySafeSourceMetadata()
-    {
-        UsageSnapshot snapshot = Parse("""
-            Account: user@example.invalid
-            Session: 00000000-0000-0000-0000-000000000000
-            Directory: C:\Users\person\secret-project
-            Model: private-model
-            5h limit: 75% left (resets 21:48)
-            """);
-
-        string json = JsonSerializer.Serialize(snapshot);
-        Assert.Equal(CodexCliStatusUsageProvider.SourceIdentifier, snapshot.Source);
-        Assert.Equal("codex-cli 0.142.5", snapshot.CodexCliVersion);
-        Assert.DoesNotContain("user@example.invalid", json, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("00000000-0000-0000-0000-000000000000", json, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("secret-project", json, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("private-model", json, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Parse_MalformedOutputReturnsNull()
-    {
-        UsageSnapshot? snapshot = CodexStatusParser.Parse(
-            "OpenAI usage is available on the web page.",
-            DateTimeOffset.UtcNow,
-            "codex-cli 0.142.5",
-            Omsk);
-
-        Assert.Null(snapshot);
-    }
-
-    [Fact]
-    public void ParseAppServerRateLimits_UsesStableProtocolResponse()
-    {
-        UsageSnapshot? snapshot = CodexStatusParser.ParseAppServerRateLimits(
+        UsageSnapshot? snapshot = CodexAppServerRateLimitsParser.Parse(
             """
             {"id":2,"result":{"rateLimits":{"primary":{"usedPercent":31,"windowDurationMins":300,"resetsAt":1783282686},"secondary":{"usedPercent":95,"windowDurationMins":10080,"resetsAt":1783584260},"rateLimitReachedType":null},"rateLimitsByLimitId":null}}
             """,
@@ -134,6 +17,7 @@ public sealed class CodexStatusParserTests
             "codex-cli 0.142.5");
 
         Assert.NotNull(snapshot);
+        Assert.Equal(2, snapshot.Windows.Count);
         Assert.Equal(69, snapshot.Windows.Single(window => window.Name == "5h").RemainingPercent);
         Assert.Equal(5, snapshot.Windows.Single(window => window.Name == "Weekly").RemainingPercent);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1783584260), snapshot.Windows.Single(window => window.Name == "Weekly").ResetAt);
@@ -141,9 +25,56 @@ public sealed class CodexStatusParserTests
     }
 
     [Fact]
-    public async Task Provider_ReturnsNullForUnavailableTerminal()
+    public void Parse_UsesNamedRateLimitMapWhenPresent()
     {
-        var provider = new CodexCliStatusUsageProvider(new FakeTerminal(false, null), Omsk);
+        UsageSnapshot? snapshot = CodexAppServerRateLimitsParser.Parse(
+            """
+            {"id":2,"result":{"rateLimits":null,"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":40,"windowDurationMins":300,"resetsAt":1783282686},"secondary":{"usedPercent":80,"windowDurationMins":10080,"resetsAt":1783584260},"rateLimitReachedType":null}}}}
+            """,
+            DateTimeOffset.UtcNow,
+            null);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(60, snapshot.Windows.Single(window => window.Name == "5h").RemainingPercent);
+        Assert.Equal(20, snapshot.Windows.Single(window => window.Name == "Weekly").RemainingPercent);
+    }
+
+    [Fact]
+    public void Parse_MalformedOrRenderedOutputReturnsNull()
+    {
+        Assert.Null(CodexAppServerRateLimitsParser.Parse("not-json", DateTimeOffset.UtcNow, null));
+        Assert.Null(CodexAppServerRateLimitsParser.Parse(
+            """
+            Usage remaining 5%
+            5h        69%     9:58 PM
+            Weekly     5%     Jul 9
+            """,
+            DateTimeOffset.UtcNow,
+            null));
+    }
+
+    [Fact]
+    public void Parse_DiscardsPrivacyFieldsAndStoresOnlySafeSourceMetadata()
+    {
+        UsageSnapshot? snapshot = CodexAppServerRateLimitsParser.Parse(
+            """
+            {"account":{"email":"user@example.invalid"},"sessionId":"00000000-0000-0000-0000-000000000000","id":2,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":300,"resetsAt":1783282686},"secondary":null,"rateLimitReachedType":null},"rateLimitsByLimitId":null}}
+            """,
+            new DateTimeOffset(2026, 7, 5, 10, 0, 0, TimeSpan.Zero),
+            "codex-cli 0.142.5");
+
+        Assert.NotNull(snapshot);
+        string json = JsonSerializer.Serialize(snapshot);
+        Assert.Equal(CodexCliStatusUsageProvider.SourceIdentifier, snapshot.Source);
+        Assert.Equal("codex-cli 0.142.5", snapshot.CodexCliVersion);
+        Assert.DoesNotContain("user@example.invalid", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("00000000-0000-0000-0000-000000000000", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Provider_ReturnsNullForUnavailableSource()
+    {
+        var provider = new CodexCliStatusUsageProvider(new FakeRateLimitsSource(false, null));
 
         UsageSnapshot? snapshot = await provider.GetUsageAsync(@"C:\fake-profile", CancellationToken.None);
 
@@ -152,17 +83,18 @@ public sealed class CodexStatusParserTests
     }
 
     [Fact]
-    public async Task Provider_ParsesFakeTerminalOutput()
+    public async Task Provider_ParsesFakeAppServerOutput()
     {
-        var provider = new CodexCliStatusUsageProvider(new FakeTerminal(true, """
-            5h limit: 88% left (resets 21:48)
-            Weekly limit: 61% left (resets 14:04 on 9 Jul)
-            """), Omsk);
+        var provider = new CodexCliStatusUsageProvider(new FakeRateLimitsSource(true,
+            """
+            {"id":2,"result":{"rateLimits":{"primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1783282686},"secondary":{"usedPercent":39,"windowDurationMins":10080,"resetsAt":1783584260},"rateLimitReachedType":null},"rateLimitsByLimitId":null}}
+            """));
 
         UsageSnapshot? snapshot = await provider.GetUsageAsync(@"C:\fake-profile", CancellationToken.None);
 
+        Assert.NotNull(snapshot);
         Assert.Equal(UsageProviderCapability.Supported, provider.Capability);
-        Assert.Equal(61, UsageIntelligence.EffectiveRemainingPercent(snapshot!));
+        Assert.Equal(61, UsageIntelligence.EffectiveRemainingPercent(snapshot));
     }
 
     [Fact]
@@ -179,20 +111,14 @@ public sealed class CodexStatusParserTests
         Assert.False(supported);
     }
 
-    private static UsageSnapshot Parse(string value)
-        => Parse(value, new DateTimeOffset(2026, 7, 5, 10, 0, 0, TimeSpan.Zero));
-
-    private static UsageSnapshot Parse(string value, DateTimeOffset capturedAt)
-        => CodexStatusParser.Parse(value, capturedAt, "codex-cli 0.142.5", Omsk)!;
-
-    private sealed class FakeTerminal(bool available, string? output) : ICodexStatusTerminal
+    private sealed class FakeRateLimitsSource(bool available, string? output) : ICodexRateLimitsSource
     {
         public bool IsAvailable => available;
 
-        public Task<CodexStatusCapture?> CaptureStatusAsync(string profileDirectory, CancellationToken cancellationToken)
+        public Task<CodexRateLimitsCapture?> CaptureRateLimitsAsync(string profileDirectory, CancellationToken cancellationToken)
             => Task.FromResult(output is null
                 ? null
-                : new CodexStatusCapture(output, new DateTimeOffset(2026, 7, 5, 10, 0, 0, TimeSpan.Zero), "codex-cli 0.142.5"));
+                : new CodexRateLimitsCapture(output, new DateTimeOffset(2026, 7, 5, 10, 0, 0, TimeSpan.Zero), "codex-cli 0.142.5"));
     }
 
     private sealed class SlowProvider : IUsageProvider
