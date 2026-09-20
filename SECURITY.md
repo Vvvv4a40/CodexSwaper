@@ -1,6 +1,6 @@
 # Security Policy
 
-Codex Profile Overlay is local-only and must never upload, display, parse, or log `auth.json`.
+Codex Swap Account is local-only and must never upload, display, parse, or log `auth.json`.
 
 ## Credential Rules
 

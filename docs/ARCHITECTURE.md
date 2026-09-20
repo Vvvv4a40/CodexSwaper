@@ -1,6 +1,6 @@
 # Architecture
 
-Codex Profile Overlay has two assemblies:
+Codex Swap Account has two assemblies:
 
 - `CodexProfileOverlay.Core`: token-safe services and models that can be unit-tested without WPF.
 - `CodexProfileOverlay`: WPF shell, tray lifecycle, window attachment, hotkeys, settings/profile windows, and Codex process launching.
@@ -37,7 +37,7 @@ The status document is schema-versioned and normalized on load. Timestamps are p
 
 ### Automatic provider
 
-The installed `codex-cli 0.142.5` app-server schema exposes `account/rateLimits/read`. The provider starts `codex app-server --stdio` with `CODEX_HOME` set to one saved profile, performs protocol initialization, requests the structured limit snapshot, and terminates the child process. This avoids terminal emulation and remains independent of `/status` screen layout.
+The supported Codex CLI app-server schema exposes `account/rateLimits/read`. The provider starts `codex app-server --stdio` with `CODEX_HOME` set to one saved profile, performs protocol initialization, requests the structured limit snapshot, and terminates the child process. This avoids terminal emulation and remains independent of `/status` screen layout.
 
 The runtime stores only normalized limit windows, remaining percentages, reset timestamps, and capture metadata. Raw app-server messages and credentials are never persisted. Refresh calls are serialized, cancellable, timeout-bound, and isolated per profile.
 

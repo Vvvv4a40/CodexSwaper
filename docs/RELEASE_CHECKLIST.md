@@ -1,10 +1,12 @@
 # Release Checklist
 
-- Run `.\test.ps1`.
+- Run `dotnet format CodexProfileOverlay.sln --verify-no-changes`.
+- Run `dotnet restore CodexProfileOverlay.sln`.
+- Build and test Release with `.\build.ps1`.
 - Run `.\verify-repository-safety.ps1`.
-- Build Release with `.\build.ps1`.
 - Publish with `.\publish.ps1`.
-- Confirm portable zip exists under `artifacts`.
+- Confirm the EXE, portable ZIP, and `SHA256SUMS.txt` exist under `artifacts`.
+- Verify the EXE and ZIP against `SHA256SUMS.txt`.
 - Launch the published executable.
 - Verify tray menu, compact mode, expanded mode, settings, and profile refresh.
 - Do not upload `auth.json`, backups, logs, `.codex-profiles`, or real local fixtures.

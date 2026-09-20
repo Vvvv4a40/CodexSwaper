@@ -109,6 +109,8 @@ Create, organize, and manage local Codex profiles.
 
 Go to the [latest GitHub release](https://github.com/ZOONGG/codex-swap-account/releases/latest).
 
+Current stable release: **v1.0.0** (September 20, 2026).
+
 Recommended download:
 
 ```text

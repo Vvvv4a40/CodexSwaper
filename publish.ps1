@@ -41,5 +41,14 @@ if (Test-Path -LiteralPath $zip) {
 }
 Compress-Archive -Path (Join-Path $Output "*") -DestinationPath $zip -Force
 
+$exe = Join-Path $Output "CodexProfileOverlay.exe"
+$checksums = Join-Path $repo "artifacts\SHA256SUMS.txt"
+$checksumLines = @(
+    "{0}  {1}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash, (Split-Path -Leaf $exe)
+    "{0}  {1}" -f (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash, (Split-Path -Leaf $zip)
+)
+Set-Content -LiteralPath $checksums -Value $checksumLines -Encoding ascii
+
 Write-Host "Published to $Output"
 Write-Host "Portable zip: $zip"
+Write-Host "Checksums: $checksums"
