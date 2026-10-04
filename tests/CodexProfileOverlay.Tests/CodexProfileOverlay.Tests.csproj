@@ -19,5 +19,8 @@
     <ProjectReference Include="..\..\src\CodexProfileOverlay.Core\CodexProfileOverlay.Core.csproj" />
     <Compile Include="..\..\src\CodexProfileOverlay\DesktopProcessCatalog.cs" Link="Platform\DesktopProcessCatalog.cs" />
     <Compile Include="..\..\src\CodexProfileOverlay\NativeMethods.cs" Link="Platform\NativeMethods.cs" />
+    <Compile Include="..\..\src\CodexProfileOverlay\CodexProcessService.cs" Link="Platform\CodexProcessService.cs" />
+    <Compile Include="..\..\src\CodexProfileOverlay\CodexWindowFinder.cs" Link="Platform\CodexWindowFinder.cs" />
+    <Compile Include="..\..\src\CodexProfileOverlay\CodexWindowInfo.cs" Link="Platform\CodexWindowInfo.cs" />
   </ItemGroup>
 </Project>

@@ -79,6 +79,21 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Length > 0 && e.Args[0].Equals("--diagnose-processes", StringComparison.Ordinal))
+        {
+            try
+            {
+                if (e.Args.Length != 2) { throw new ArgumentException("Pass --diagnose-processes followed by an output JSON path."); }
+                DesktopProcessDiagnostics.WriteReport(e.Args[1]);
+                Shutdown(0);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(exception);
+                Shutdown(1);
+            }
+            return;
+        }
         base.OnStartup(e);
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 

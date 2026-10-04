@@ -7,23 +7,46 @@ namespace CodexProfileOverlay;
 internal sealed class CodexProcessService
 {
     private readonly SafeLogger logger;
-    private readonly CodexWindowFinder windowFinder;
+    private readonly Func<int, IReadOnlyList<CapturedDesktopProcess>> captureProcesses;
+    private readonly Func<IReadOnlyList<CodexWindowInfo>> findWindows;
+    private readonly Func<DesktopProcessSnapshot, string?> executablePath;
+    private readonly Action<TrackedDesktopProcess> terminateProcess;
     private readonly HashSet<string> verifiedDesktopPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly int sessionId;
 
     public CodexProcessService(SafeLogger logger)
+        : this(logger, CurrentSessionId(), DesktopProcessCatalog.Capture,
+            new CodexWindowFinder(logger).FindMainWindows, DesktopProcessCatalog.ExecutablePath,
+            process => process.Terminate())
+    {
+    }
+
+    // The same shutdown path is exercised with isolated process fixtures; production always uses the native catalog.
+    internal CodexProcessService(SafeLogger logger, int sessionId,
+        Func<int, IReadOnlyList<CapturedDesktopProcess>> captureProcesses,
+        Func<IReadOnlyList<CodexWindowInfo>> findWindows,
+        Func<DesktopProcessSnapshot, string?> executablePath,
+        Action<TrackedDesktopProcess> terminateProcess)
     {
         this.logger = logger;
-        windowFinder = new CodexWindowFinder(logger);
+        this.sessionId = sessionId;
+        this.captureProcesses = captureProcesses;
+        this.findWindows = findWindows;
+        this.executablePath = executablePath;
+        this.terminateProcess = terminateProcess;
+    }
+
+    private static int CurrentSessionId()
+    {
         using Process currentProcess = Process.GetCurrentProcess();
-        sessionId = currentProcess.SessionId;
+        return currentProcess.SessionId;
     }
 
     public void ObserveDesktopWindow(CodexWindowInfo window)
     {
         try
         {
-            string? path = DesktopProcessCatalog.ExecutablePath(new DesktopProcessSnapshot(window.ProcessId, 0, sessionId, window.StartTimeUtc));
+            string? path = executablePath(new DesktopProcessSnapshot(window.ProcessId, 0, sessionId, window.StartTimeUtc));
             if (!string.IsNullOrWhiteSpace(path)) { verifiedDesktopPaths.Add(Path.GetFullPath(path)); }
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
@@ -35,13 +58,15 @@ internal sealed class CodexProcessService
     public async Task CloseCodexAsync(int gracefulTimeoutSeconds, bool allowForceClose, CancellationToken cancellationToken)
     {
         var tracked = new Dictionary<int, TrackedDesktopProcess>();
+        var desktopProcessIds = new HashSet<int>();
+        var reportedFailures = new HashSet<(int ProcessId, string Message)>();
         var closeRequests = new HashSet<(IntPtr Window, DateTime Started)>();
         try
         {
             bool RefreshAndRequestClose()
             {
-                var captured = DesktopProcessCatalog.Capture(sessionId);
-                var windows = windowFinder.FindMainWindows();
+                var captured = captureProcesses(sessionId);
+                var windows = findWindows();
                 var roots = new HashSet<int>();
                 foreach (var window in windows)
                 {
@@ -61,7 +86,7 @@ internal sealed class CodexProcessService
                     if (!candidate || process.Identity.ProcessId == Environment.ProcessId) { continue; }
                     try
                     {
-                        string? path = DesktopProcessCatalog.ExecutablePath(process.Identity);
+                        string? path = executablePath(process.Identity);
                         if (path is not null && (verifiedDesktopPaths.Contains(Path.GetFullPath(path)) || DesktopProcessCatalog.IsInstalledDesktopPath(path)))
                         {
                             roots.Add(process.Identity.ProcessId);
@@ -73,6 +98,7 @@ internal sealed class CodexProcessService
                         throw new InvalidOperationException($"Cannot verify desktop candidate PID {process.Identity.ProcessId}. Close it normally before switching.", exception);
                     }
                 }
+                desktopProcessIds.UnionWith(roots);
                 // Restore only the exact remembered identities; a recycled PID fails before any shutdown action.
                 var remembered = tracked.Values.Select(process => process.Identity with { ExitTimeUtc = process.ExitTimeUtc }).ToArray();
                 var capturedIdentities = DesktopProcessSelector.RestoreLineage(captured.Select(item => item.Identity), remembered);
@@ -89,11 +115,12 @@ internal sealed class CodexProcessService
                     }
                     if (!tracked.ContainsKey(identity.ProcessId))
                     {
-                        var process = DesktopProcessCatalog.Open(identity);
+                        string executableName = captured.First(item => item.Identity.ProcessId == identity.ProcessId).ExecutableName;
+                        var process = DesktopProcessCatalog.Open(identity, executableName);
                         if (process is not null)
                         {
                             tracked.Add(identity.ProcessId, process);
-                            logger.Info($"Tracking desktop process {identity.ProcessId} in session {sessionId}.");
+                            logger.Info($"Tracking desktop process {identity.ProcessId} ({executableName}), parent {identity.ParentProcessId}, session {sessionId}, role {(desktopProcessIds.Contains(identity.ProcessId) ? "desktop" : "helper")}.");
                         }
                         else { retrySnapshot = true; }
                     }
@@ -119,31 +146,63 @@ internal sealed class CodexProcessService
                 return retrySnapshot || tracked.Values.Any(process => !process.HasExited);
             }
 
+            async Task<bool> RefreshAndConfirmExitAsync()
+            {
+                if (RefreshAndRequestClose()) { return true; }
+                // Capture again after observing exit: a parent may spawn its last helper between capture and exit.
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+                return RefreshAndRequestClose();
+            }
+
             var deadline = DateTimeOffset.UtcNow.AddSeconds(Math.Clamp(gracefulTimeoutSeconds, 1, 60));
-            while (RefreshAndRequestClose())
+            while (await RefreshAndConfirmExitAsync().ConfigureAwait(false))
             {
                 if (DateTimeOffset.UtcNow >= deadline) { break; }
                 await Task.Delay(250, cancellationToken).ConfigureAwait(false);
             }
-            if (!RefreshAndRequestClose()) { return; }
+            if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false)) { return; }
             if (!allowForceClose)
             {
                 throw new InvalidOperationException("Codex Desktop is still running. Authorization has not been changed.");
             }
             deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            void RequestTermination(IEnumerable<TrackedDesktopProcess> processes)
+            {
+                DesktopShutdownBatch.RequestTermination(processes.Select(process => process.Identity), desktopProcessIds,
+                    identity =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var process = tracked[identity.ProcessId];
+                        if (process.HasExited || process.TerminationRequested) { return; }
+                        logger.Info($"Terminating selected desktop process {identity.ProcessId} ({process.ExecutableName}), role {(desktopProcessIds.Contains(identity.ProcessId) ? "desktop" : "helper")}, after graceful timeout.");
+                        terminateProcess(process);
+                    },
+                    (identity, exception) =>
+                    {
+                        if (reportedFailures.Add((identity.ProcessId, exception.Message)))
+                        {
+                            logger.Error($"Shutdown request failed for PID {identity.ProcessId} ({tracked[identity.ProcessId].ExecutableName}); continuing other selected processes.", exception);
+                        }
+                    });
+            }
             do
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                foreach (var process in tracked.Values.OrderByDescending(process => process.Identity.StartTimeUtc))
+                // Stop the desktop parent before helpers: a live Electron parent can respawn terminated children.
+                RequestTermination(tracked.Values.Where(process => desktopProcessIds.Contains(process.Identity.ProcessId)));
+                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false))
                 {
-                    if (process.HasExited) { continue; }
-                    logger.Info($"Terminating selected desktop process {process.Identity.ProcessId} after graceful timeout.");
-                    process.Terminate();
+                    logger.Info("All selected desktop processes exited before authorization switching.");
+                    return;
                 }
-                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
-                if (!RefreshAndRequestClose()) { return; }
+                RequestTermination(tracked.Values);
+                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false)) { return; }
             } while (DateTimeOffset.UtcNow < deadline);
-            throw new InvalidOperationException("Selected Codex Desktop processes did not exit. Authorization has not been changed.");
+            var remaining = tracked.Values.Where(process => !process.HasExited).Select(process => $"{process.Identity.ProcessId} ({process.ExecutableName})").ToArray();
+            string remainingDescription = remaining.Length == 0 ? "a changing desktop snapshot" : string.Join(", ", remaining);
+            throw new InvalidOperationException($"Selected Codex Desktop processes did not exit: {remainingDescription}. Authorization has not been changed.");
         }
         finally
         {
@@ -153,8 +212,8 @@ internal sealed class CodexProcessService
 
     public void VerifyDesktopStopped()
     {
-        var captured = DesktopProcessCatalog.Capture(sessionId);
-        if (windowFinder.FindMainWindows().Count > 0)
+        var captured = captureProcesses(sessionId);
+        if (findWindows().Count > 0)
         {
             throw new InvalidOperationException("Codex Desktop reopened before switching. Authorization has not been changed.");
         }
@@ -163,7 +222,7 @@ internal sealed class CodexProcessService
             string file = process.ExecutableName;
             if (!file.Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase) && !file.Equals("Codex.exe", StringComparison.OrdinalIgnoreCase)
                 && !verifiedDesktopPaths.Any(path => Path.GetFileName(path).Equals(file, StringComparison.OrdinalIgnoreCase))) { continue; }
-            string? path = DesktopProcessCatalog.ExecutablePath(process.Identity);
+            string? path = executablePath(process.Identity);
             if (path is not null && (verifiedDesktopPaths.Contains(Path.GetFullPath(path)) || DesktopProcessCatalog.IsInstalledDesktopPath(path)))
             {
                 throw new InvalidOperationException("Codex Desktop is running before switching. Authorization has not been changed.");

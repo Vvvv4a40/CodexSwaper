@@ -77,7 +77,7 @@ internal static class DesktopProcessCatalog
             && string.Equals(packagesDirectory, expectedPackagesDirectory, StringComparison.OrdinalIgnoreCase);
     }
 
-    public static TrackedDesktopProcess? Open(DesktopProcessSnapshot identity)
+    public static TrackedDesktopProcess? Open(DesktopProcessSnapshot identity, string executableName = "desktop process")
     {
         SafeProcessHandle handle = ProcessNative.OpenProcess(0x1000 | 0x100000, false, (uint)identity.ProcessId);
         if (handle.IsInvalid)
@@ -85,13 +85,14 @@ internal static class DesktopProcessCatalog
             int error = Marshal.GetLastWin32Error();
             handle.Dispose();
             if (error == 87) { return null; } // The process disappeared after the snapshot.
-            throw new Win32Exception(error, $"Cannot inspect selected desktop process {identity.ProcessId}.");
+            throw new Win32Exception(error, $"OpenProcess(query/synchronize) failed for PID {identity.ProcessId} ({executableName}), Win32={error}.");
         }
         try
         {
             if (!ProcessNative.GetProcessTimes(handle, out ProcessFileTime creation, out _, out _, out _))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, $"GetProcessTimes failed for selected PID {identity.ProcessId} ({executableName}), Win32={error}.");
             }
             if (identity.StartTimeUtc is null)
             {
@@ -99,15 +100,17 @@ internal static class DesktopProcessCatalog
             }
             if (creation.ToDateTimeUtc() != identity.StartTimeUtc) { handle.Dispose(); return null; }
             // Keep the handle open throughout shutdown so the original process identity remains pinned.
-            return new TrackedDesktopProcess(identity, handle);
+            return new TrackedDesktopProcess(identity, handle, executableName);
         }
         catch { handle.Dispose(); throw; }
     }
 }
 
-internal sealed class TrackedDesktopProcess(DesktopProcessSnapshot identity, SafeProcessHandle handle) : IDisposable
+internal sealed class TrackedDesktopProcess(DesktopProcessSnapshot identity, SafeProcessHandle handle, string executableName) : IDisposable
 {
     public DesktopProcessSnapshot Identity { get; } = identity;
+    public string ExecutableName { get; } = executableName;
+    public bool TerminationRequested { get; private set; }
 
     public DateTime? ExitTimeUtc
     {
@@ -116,7 +119,7 @@ internal sealed class TrackedDesktopProcess(DesktopProcessSnapshot identity, Saf
             if (!HasExited) { return null; }
             if (!ProcessNative.GetProcessTimes(handle, out _, out ProcessFileTime exit, out _, out _))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
+                throw NativeError("GetProcessTimes(exit)");
             }
             return exit.ToDateTimeUtc();
         }
@@ -131,7 +134,7 @@ internal sealed class TrackedDesktopProcess(DesktopProcessSnapshot identity, Saf
             {
                 0 => true,
                 258 => false,
-                _ => throw new Win32Exception(Marshal.GetLastWin32Error()),
+                _ => throw NativeError("WaitForSingleObject"),
             };
         }
     }
@@ -142,30 +145,38 @@ internal sealed class TrackedDesktopProcess(DesktopProcessSnapshot identity, Saf
         if (windowProcessId != Identity.ProcessId || HasExited) { return; }
         if (!ProcessNative.PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero))
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            throw NativeError("PostMessage(WM_CLOSE)");
         }
     }
 
     public void Terminate()
     {
-        if (HasExited) { return; }
-        using SafeProcessHandle terminationHandle = ProcessNative.OpenProcess(0x1000 | 0x100000 | 1, false, (uint)Identity.ProcessId);
+        if (HasExited || TerminationRequested) { return; }
+        // Synchronization uses the already pinned handle; the new handle needs only query + terminate.
+        using SafeProcessHandle terminationHandle = ProcessNative.OpenProcess(0x1000 | 1, false, (uint)Identity.ProcessId);
         if (terminationHandle.IsInvalid)
         {
             int error = Marshal.GetLastWin32Error();
             if (HasExited) { return; }
-            throw new Win32Exception(error, $"Cannot terminate selected desktop process {Identity.ProcessId}.");
+            throw NativeError("OpenProcess(query/terminate)", error);
         }
         if (!ProcessNative.GetProcessTimes(terminationHandle, out ProcessFileTime creation, out _, out _, out _))
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            throw NativeError("GetProcessTimes(terminate handle)");
         }
         if (creation.ToDateTimeUtc() != Identity.StartTimeUtc) { throw new InvalidOperationException("Desktop process identity changed; refusing termination."); }
         if (!ProcessNative.TerminateProcess(terminationHandle, 1))
         {
             int error = Marshal.GetLastWin32Error();
-            if (!HasExited) { throw new Win32Exception(error); }
+            if (!HasExited) { throw NativeError("TerminateProcess", error); }
         }
+        else { TerminationRequested = true; }
+    }
+
+    private Win32Exception NativeError(string operation, int? error = null)
+    {
+        int code = error ?? Marshal.GetLastWin32Error();
+        return new Win32Exception(code, $"{operation} failed for PID {Identity.ProcessId} ({ExecutableName}), Win32={code}.");
     }
 
     public void Dispose() => handle.Dispose();
