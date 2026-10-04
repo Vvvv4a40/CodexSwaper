@@ -310,6 +310,7 @@ internal sealed class OverlayController : IDisposable
         EnsureOverlay();
         switching = true;
         AuthSwitchResult? switchResult = null;
+        DesktopShutdownGuard? shutdownGuard = null;
         bool authorizationStarted = false;
         bool authorizationRestored = false;
         overlayWindow!.SetSwitching(true);
@@ -327,9 +328,9 @@ internal sealed class OverlayController : IDisposable
             overlayWindow.ShowNotification(localizer.Format("SwitchingToProfile", profileName));
 
             bool allowForceClose = settings.ForceCloseFallback;
-            await processService.CloseCodexAsync(settings.GracefulCloseTimeoutSeconds, allowForceClose, disposalTokenSource.Token).ConfigureAwait(true);
+            shutdownGuard = await processService.CloseCodexAsync(settings.GracefulCloseTimeoutSeconds, allowForceClose, disposalTokenSource.Token).ConfigureAwait(true);
             MigrateLegacyProfileStateSafely();
-            processService.VerifyDesktopStopped();
+            processService.VerifyDesktopStopped(shutdownGuard);
             authorizationStarted = true;
             switchResult = await switchService.SwitchAsync(profileName, disposalTokenSource.Token).ConfigureAwait(true);
             RefreshProfiles();
@@ -365,6 +366,7 @@ internal sealed class OverlayController : IDisposable
         }
         finally
         {
+            shutdownGuard?.Dispose();
             switching = false;
             overlayWindow?.SetSwitching(false);
             if (overlayWindow is not null)

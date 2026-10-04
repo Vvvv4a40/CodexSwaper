@@ -1,4 +1,4 @@
-# Local 1.0.2 process selection and shutdown fix
+# Local 1.0.3 process selection and shutdown fix
 
 This local build is based on commit 92b9dc6d378c1c920b0103ecb954dcfc313ff09a. NuGet dependency versions are unchanged.
 
@@ -15,6 +15,8 @@ The shutdown code does not request administrator rights or stop/reconfigure the 
 Desktop relaunch now resolves the Start menu entry by the OpenAI.Codex package AppUserModelID, not the display label Codex. The installed app can therefore be shown as ChatGPT without making relaunch fail or accidentally selecting another ChatGPT package.
 
 Version 1.0.2 corrects a further shutdown failure seen in the local logs: the original 1.0.1 force-close loop attempted newest helpers first and aborted on their first access-denied result. The main ChatGPT desktop could therefore stay running and respawn helpers. Force close now prioritizes verified desktop executables oldest first, waits for their teardown, then attempts the remaining selected helpers. Individual Win32 failures are logged with operation, PID, executable and code, while other selected processes still receive requests. Identity mismatches and cancellation remain fatal. A successful request is remembered so it is not repeated against an already terminating process. The final barrier still requires every tracked process to have exited; a protected surviving helper is never silently ignored.
+
+Version 1.0.3 addresses the next observed failure: after terminating the desktop, a Toolhelp snapshot could still contain its old PID while reopening it to query its executable failed with access denied. Previously pinned identities now use their retained handles instead of repeating path queries. Known changed creation times remain fatal; untracked candidates still require normal verification. If identity queries become unavailable after a successful termination request, the code waits on the pinned handle within the existing deadline and does not treat that process as exited early. Successful shutdown transfers the handles to a disposable guard retained through final verification, authorization replacement and rollback, then released in the controller's finally block. This also prevents the same stale-PID error in the final verification immediately before switching.
 
 The optional `--diagnose-processes <output.json>` mode runs before normal startup or single-instance activation. It only captures process identities, verifies package paths and probes query/termination access, writing a JSON report and diagnostic logs beside that report. It does not discover profiles, read settings/auth, apply startup registration, send close messages, terminate processes or switch accounts. Opening a termination-capable handle is an access check, not proof that a later termination will succeed.
 

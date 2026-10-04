@@ -55,14 +55,28 @@ internal sealed class CodexProcessService
         }
     }
 
-    public async Task CloseCodexAsync(int gracefulTimeoutSeconds, bool allowForceClose, CancellationToken cancellationToken)
+    public async Task<DesktopShutdownGuard> CloseCodexAsync(int gracefulTimeoutSeconds, bool allowForceClose, CancellationToken cancellationToken)
     {
         var tracked = new Dictionary<int, TrackedDesktopProcess>();
         var desktopProcessIds = new HashSet<int>();
         var reportedFailures = new HashSet<(int ProcessId, string Message)>();
         var closeRequests = new HashSet<(IntPtr Window, DateTime Started)>();
+        bool handlesTransferred = false;
         try
         {
+            DesktopShutdownGuard CompleteShutdown()
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (tracked.Values.Any(process => !process.HasExited))
+                {
+                    throw new InvalidOperationException("Selected desktop processes are still running. Authorization has not been changed.");
+                }
+                var guard = new DesktopShutdownGuard(tracked);
+                logger.Info("All selected desktop processes exited before authorization switching.");
+                handlesTransferred = true;
+                return guard;
+            }
+
             bool RefreshAndRequestClose()
             {
                 var captured = captureProcesses(sessionId);
@@ -84,6 +98,17 @@ internal sealed class CodexProcessService
                         || file.Equals("Codex.exe", StringComparison.OrdinalIgnoreCase)
                         || verifiedDesktopPaths.Any(path => Path.GetFileName(path).Equals(file, StringComparison.OrdinalIgnoreCase));
                     if (!candidate || process.Identity.ProcessId == Environment.ProcessId) { continue; }
+                    if (tracked.TryGetValue(process.Identity.ProcessId, out var pinned))
+                    {
+                        DesktopShutdownGuard.VerifySnapshotIdentity(process.Identity, pinned.Identity);
+                        // Windows can retain an exited process in Toolhelp while reopening it returns access denied.
+                        // The retained handle identifies the exact process; never re-query its executable by PID.
+                        if (!pinned.HasExited && desktopProcessIds.Contains(process.Identity.ProcessId))
+                        {
+                            roots.Add(process.Identity.ProcessId);
+                        }
+                        continue;
+                    }
                     try
                     {
                         string? path = executablePath(process.Identity);
@@ -95,17 +120,29 @@ internal sealed class CodexProcessService
                     catch (ArgumentException) { } // The candidate exited during inspection.
                     catch (System.ComponentModel.Win32Exception exception)
                     {
-                        throw new InvalidOperationException($"Cannot verify desktop candidate PID {process.Identity.ProcessId}. Close it normally before switching.", exception);
+                        throw new InvalidOperationException($"Cannot verify desktop candidate PID {process.Identity.ProcessId}, Win32={exception.NativeErrorCode}: {exception.Message}. Close it normally before switching.", exception);
                     }
                 }
                 desktopProcessIds.UnionWith(roots);
-                // Restore only the exact remembered identities; a recycled PID fails before any shutdown action.
-                var remembered = tracked.Values.Select(process => process.Identity with { ExitTimeUtc = process.ExitTimeUtc }).ToArray();
-                var capturedIdentities = DesktopProcessSelector.RestoreLineage(captured.Select(item => item.Identity), remembered);
-                roots.UnionWith(remembered.Select(identity => identity.ProcessId));
-                var selected = DesktopProcessSelector.SelectTree(capturedIdentities, roots, sessionId, Environment.ProcessId);
                 bool retrySnapshot = windows.Any(window => !captured.Any(item => item.Identity.ProcessId == window.ProcessId
                     && item.Identity.StartTimeUtc == window.StartTimeUtc));
+                // Restore only the exact remembered identities; a recycled PID fails before any shutdown action.
+                var remembered = tracked.Values.Select(process => process.Identity with { ExitTimeUtc = process.ExitTimeUtc }).ToArray();
+                var snapshotIdentities = captured.Select(item =>
+                {
+                    if (item.Identity.StartTimeUtc is null && tracked.TryGetValue(item.Identity.ProcessId, out var pending)
+                        && (pending.TerminationRequested || pending.HasExited))
+                    {
+                        // Teardown can temporarily deny a new identity query. Keep waiting on the pinned process;
+                        // this neither marks it exited nor grants a new termination request to an unknown PID.
+                        retrySnapshot |= !pending.HasExited;
+                        return pending.Identity;
+                    }
+                    return item.Identity;
+                });
+                var capturedIdentities = DesktopProcessSelector.RestoreLineage(snapshotIdentities, remembered);
+                roots.UnionWith(remembered.Select(identity => identity.ProcessId));
+                var selected = DesktopProcessSelector.SelectTree(capturedIdentities, roots, sessionId, Environment.ProcessId);
                 foreach (var identity in selected)
                 {
                     if (identity.ExitTimeUtc is not null || !captured.Any(item => item.Identity.ProcessId == identity.ProcessId)) { continue; } // Lineage only.
@@ -160,7 +197,7 @@ internal sealed class CodexProcessService
                 if (DateTimeOffset.UtcNow >= deadline) { break; }
                 await Task.Delay(250, cancellationToken).ConfigureAwait(false);
             }
-            if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false)) { return; }
+            if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false)) { return CompleteShutdown(); }
             if (!allowForceClose)
             {
                 throw new InvalidOperationException("Codex Desktop is still running. Authorization has not been changed.");
@@ -193,12 +230,11 @@ internal sealed class CodexProcessService
                 await Task.Delay(250, cancellationToken).ConfigureAwait(false);
                 if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false))
                 {
-                    logger.Info("All selected desktop processes exited before authorization switching.");
-                    return;
+                    return CompleteShutdown();
                 }
                 RequestTermination(tracked.Values);
                 await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-                if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false)) { return; }
+                if (!await RefreshAndConfirmExitAsync().ConfigureAwait(false)) { return CompleteShutdown(); }
             } while (DateTimeOffset.UtcNow < deadline);
             var remaining = tracked.Values.Where(process => !process.HasExited).Select(process => $"{process.Identity.ProcessId} ({process.ExecutableName})").ToArray();
             string remainingDescription = remaining.Length == 0 ? "a changing desktop snapshot" : string.Join(", ", remaining);
@@ -206,12 +242,17 @@ internal sealed class CodexProcessService
         }
         finally
         {
-            foreach (var process in tracked.Values) { process.Dispose(); }
+            if (!handlesTransferred)
+            {
+                foreach (var process in tracked.Values) { process.Dispose(); }
+            }
         }
     }
 
-    public void VerifyDesktopStopped()
+    public void VerifyDesktopStopped(DesktopShutdownGuard shutdownGuard)
     {
+        ArgumentNullException.ThrowIfNull(shutdownGuard);
+        shutdownGuard.ThrowIfDisposed();
         var captured = captureProcesses(sessionId);
         if (findWindows().Count > 0)
         {
@@ -219,6 +260,7 @@ internal sealed class CodexProcessService
         }
         foreach (var process in captured)
         {
+            if (shutdownGuard.IsKnownExitedProcess(process.Identity)) { continue; }
             string file = process.ExecutableName;
             if (!file.Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase) && !file.Equals("Codex.exe", StringComparison.OrdinalIgnoreCase)
                 && !verifiedDesktopPaths.Any(path => Path.GetFileName(path).Equals(file, StringComparison.OrdinalIgnoreCase))) { continue; }
@@ -367,4 +409,41 @@ internal sealed class CodexProcessService
         return null;
     }
 
+}
+
+// The caller retains exact process handles through the final check and authorization operation.
+// A completed shutdown must not need to reopen a stale PID just to prove that it exited.
+internal sealed class DesktopShutdownGuard(Dictionary<int, TrackedDesktopProcess> processes) : IDisposable
+{
+    private bool disposed;
+
+    public bool IsKnownExitedProcess(DesktopProcessSnapshot snapshot)
+    {
+        ThrowIfDisposed();
+        if (!processes.TryGetValue(snapshot.ProcessId, out var process)) { return false; }
+        VerifySnapshotIdentity(snapshot, process.Identity);
+        if (!process.HasExited)
+        {
+            throw new InvalidOperationException("A retained desktop process is still running. Authorization has not been changed.");
+        }
+        return true;
+    }
+
+    internal static void VerifySnapshotIdentity(DesktopProcessSnapshot snapshot, DesktopProcessSnapshot pinned)
+    {
+        if (snapshot.ProcessId != pinned.ProcessId || snapshot.SessionId != pinned.SessionId
+            || (snapshot.StartTimeUtc is DateTime started && started != pinned.StartTimeUtc))
+        {
+            throw new InvalidOperationException($"Desktop process identity changed for PID {snapshot.ProcessId}; authorization has not been changed.");
+        }
+    }
+
+    internal void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(disposed, this);
+
+    public void Dispose()
+    {
+        if (disposed) { return; }
+        disposed = true;
+        foreach (var process in processes.Values) { process.Dispose(); }
+    }
 }
