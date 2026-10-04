@@ -15,6 +15,11 @@ internal sealed class CodexWindowFinder
 
     public CodexWindowInfo? FindMainWindow()
     {
+        return FindMainWindows().FirstOrDefault();
+    }
+
+    public IReadOnlyList<CodexWindowInfo> FindMainWindows()
+    {
         IntPtr foreground = NativeMethods.GetForegroundWindow();
         var matches = new List<CodexWindowInfo>();
         NativeMethods.EnumWindows((hwnd, _) =>
@@ -30,7 +35,7 @@ internal sealed class CodexWindowFinder
 
         return matches
             .OrderByDescending(info => info.Hwnd == foreground)
-            .FirstOrDefault();
+            .ToArray();
     }
 
     public CodexWindowInfo? RefreshKnownWindow(CodexWindowInfo knownWindow)
@@ -42,6 +47,16 @@ internal sealed class CodexWindowFinder
 
         NativeMethods.GetWindowThreadProcessId(knownWindow.Hwnd, out uint processId);
         if (processId != knownWindow.ProcessId)
+        {
+            return null;
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(knownWindow.ProcessId);
+            if (process.StartTime.ToUniversalTime() != knownWindow.StartTimeUtc || !IsLikelyOfficialCodexProcess(process)) { return null; }
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return null;
         }
@@ -96,12 +111,13 @@ internal sealed class CodexWindowFinder
         {
             using Process process = Process.GetProcessById((int)processId);
             string title = NativeMethods.GetWindowTitle(hwnd);
-            if (!IsLikelyOfficialCodexProcess(process))
+            using Process currentProcess = Process.GetCurrentProcess();
+            if (process.SessionId != currentProcess.SessionId || !IsLikelyOfficialCodexProcess(process))
             {
                 return null;
             }
 
-            return new CodexWindowInfo(hwnd, process.Id, process.ProcessName, title, isMinimized);
+            return new CodexWindowInfo(hwnd, process.Id, process.ProcessName, title, isMinimized, process.StartTime.ToUniversalTime());
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
@@ -122,22 +138,16 @@ internal sealed class CodexWindowFinder
 
     private static bool IsLikelyOfficialCodexProcess(Process process)
     {
-        string[] rejectedNames = ["chrome", "msedge", "firefox", "code", "devenv", "explorer", "windowsterminal", "cmd", "powershell"];
-        if (rejectedNames.Any(name => process.ProcessName.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        if (!process.ProcessName.Equals("Codex", StringComparison.OrdinalIgnoreCase)
+            && !process.ProcessName.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
 
-        if (process.ProcessName.Contains("Codex", StringComparison.OrdinalIgnoreCase))
-        {
-            return !process.ProcessName.Contains("Overlay", StringComparison.OrdinalIgnoreCase);
-        }
-
         try
         {
-            var versionInfo = process.MainModule?.FileVersionInfo;
-            return versionInfo?.FileDescription?.Contains("Codex", StringComparison.OrdinalIgnoreCase) == true
-                || versionInfo?.ProductName?.Contains("Codex", StringComparison.OrdinalIgnoreCase) == true;
+            string? path = process.MainModule?.FileName;
+            return path is not null && DesktopProcessCatalog.IsInstalledDesktopPath(path);
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
