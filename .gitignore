@@ -4,6 +4,9 @@
 **/active-profile.txt
 **/settings.json
 **/profiles.json
+**/profile-status.json
+**/.env
+**/.env.*
 **/logs/
 **/backups/
 **/removed-profiles/

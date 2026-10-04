@@ -10,7 +10,19 @@ public static class ProfileName
         }
 
         string trimmed = name.Trim();
-        if (!string.Equals(name, trimmed, StringComparison.Ordinal) || trimmed is "." or "..")
+        if (!string.Equals(name, trimmed, StringComparison.Ordinal) || trimmed is "." or ".."
+            || trimmed.Length > 255 || trimmed.EndsWith(".", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        string stem = trimmed.Split('.')[0];
+        if (stem.Equals("CON", StringComparison.OrdinalIgnoreCase)
+            || stem.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+            || stem.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+            || stem.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+            || (stem.Length == 4 && (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) && stem[3] is >= '1' and <= '9'))
         {
             return false;
         }

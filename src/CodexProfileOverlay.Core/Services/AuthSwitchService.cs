@@ -35,6 +35,8 @@ public sealed class AuthSwitchService
 
         try
         {
+            PathSafety.RequireRegularPath(paths.SharedAuthFile);
+            PathSafety.RequireRegularPath(paths.ActiveProfileFile);
             previousProfile = activeProfileStore.Read();
             var targetProfile = profileDiscovery.GetRequiredProfile(targetProfileName);
             if (string.Equals(previousProfile, targetProfile.Name, StringComparison.OrdinalIgnoreCase))
@@ -53,6 +55,7 @@ public sealed class AuthSwitchService
             }
 
             backup = backups.CreateSwitchBackup(paths.SharedAuthFile, targetProfile.AuthFilePath, previousProfile);
+            string completedBackup;
             try
             {
                 if (previousProfile is not null)
@@ -62,6 +65,7 @@ public sealed class AuthSwitchService
                 }
                 replacer.ReplaceFromSource(targetProfile.AuthFilePath, paths.SharedAuthFile);
                 activeProfileStore.Write(targetProfile.Name);
+                completedBackup = backups.CompleteSwitchBackup(backup);
             }
             catch
             {
@@ -71,7 +75,6 @@ public sealed class AuthSwitchService
                 throw;
             }
 
-            string completedBackup = backups.CompleteSwitchBackup(backup);
             return new AuthSwitchResult(targetProfile.Name, previousProfile, completedBackup);
         }
         finally
@@ -82,20 +85,25 @@ public sealed class AuthSwitchService
 
     public void Rollback(AuthSwitchResult result)
     {
-        if (string.IsNullOrWhiteSpace(result.BackupPath))
+        if (!switchGate.Wait(0))
         {
-            throw new InvalidOperationException("The switch result does not contain a rollback backup.");
+            throw new InvalidOperationException("A profile switch is already in progress.");
         }
+        try
+        {
+            if (string.IsNullOrWhiteSpace(result.BackupPath))
+            {
+                throw new InvalidOperationException("The switch result does not contain a rollback backup.");
+            }
 
-        backups.RestoreCompletedSwitchBackup(result.BackupPath, paths.SharedAuthFile, paths.ActiveProfileFile);
+            backups.RestoreCompletedSwitchBackup(result.BackupPath, paths.SharedAuthFile, paths.ActiveProfileFile);
+        }
+        finally { switchGate.Release(); }
     }
 
     private void RestoreBackupIfPossible(SwitchBackup backup, string? previousProfile)
     {
-        if (!File.Exists(backup.PreviousAuthFile))
-        {
-            return;
-        }
+        backups.VerifyPreviousAuthentication(backup);
 
         new AtomicFileReplacer().ReplaceFromSource(backup.PreviousAuthFile, paths.SharedAuthFile);
         if (previousProfile is not null)
@@ -107,6 +115,7 @@ public sealed class AuthSwitchService
 
     private void RestoreActiveProfile(string? previousProfile)
     {
+        PathSafety.RequireRegularPath(paths.ActiveProfileFile);
         if (previousProfile is not null)
         {
             activeProfileStore.Write(previousProfile);

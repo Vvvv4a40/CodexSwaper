@@ -4,28 +4,48 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test-publish:
-    runs-on: windows-latest
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          dotnet-version: 8.0.x
-      - name: Restore
-        run: dotnet restore CodexProfileOverlay.sln
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.425
+      - name: Repository and history safety scan
+        run: .\verify-repository-safety.ps1 -IncludeHistory
+      - name: Locked restore and vulnerability audit
+        run: .\audit-dependencies.ps1
       - name: Build
         run: dotnet build CodexProfileOverlay.sln -c Release -p:Platform=x64 --no-restore
       - name: Test
-        run: dotnet test CodexProfileOverlay.sln -c Release -p:Platform=x64 --no-build
-      - name: Repository safety scan
-        shell: pwsh
-        run: .\verify-repository-safety.ps1
+        run: dotnet test CodexProfileOverlay.sln -c Release -p:Platform=x64 --no-build --no-restore
       - name: Publish
-        shell: pwsh
         run: .\publish.ps1 -Configuration Release
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: CodexProfileOverlay-win-x64
-          path: artifacts/CodexProfileOverlay-win-x64-portable.zip
+          path: |
+            artifacts/publish/CodexProfileOverlay.exe
+            artifacts/publish/LICENSE.txt
+            artifacts/publish/THIRD_PARTY_NOTICES.txt
+            artifacts/publish/licenses/
+            artifacts/CodexProfileOverlay-win-x64-portable.zip
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

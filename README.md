@@ -1,21 +1,23 @@
+> This fork version 1.1.0 hardens path and rollback checks, reduces polling work and locks dependencies. See [SECURITY.md](SECURITY.md) for audit scope and limitations. Based on [ZOONGG/codex-swap-account](https://github.com/ZOONGG/codex-swap-account), MIT. Real-account switching with this version has not been validated.
+
 <div align="center">
 
 # Codex Swap Account
 
-**A safe, local Windows account switcher for the Codex desktop app.**
+**A local Windows account switcher for the Codex desktop app.**
 
 Switch between multiple Codex accounts from an overlay attached directly to the Codex window — with tray controls, global hotkeys, shared chat history, multi-monitor support, and automatic rollback if a switch fails.
 
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/ZOONGG/codex-swap-account)
+[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/Vvvv4a40/CodexSwaper)
 [![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![Build](https://github.com/ZOONGG/codex-swap-account/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/ZOONGG/codex-swap-account/actions/workflows/windows-ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/ZOONGG/codex-swap-account?display_name=tag&sort=semver)](https://github.com/ZOONGG/codex-swap-account/releases/latest)
-[![License](https://img.shields.io/github/license/ZOONGG/codex-swap-account)](LICENSE)
+[![Build](https://github.com/Vvvv4a40/CodexSwaper/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/Vvvv4a40/CodexSwaper/actions/workflows/windows-ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Vvvv4a40/CodexSwaper?display_name=tag&sort=semver)](https://github.com/Vvvv4a40/CodexSwaper/releases/latest)
+[![License](https://img.shields.io/github/license/Vvvv4a40/CodexSwaper)](LICENSE)
 [![No telemetry](https://img.shields.io/badge/telemetry-none-2DD4A3)](#privacy-and-security)
 
-[Download latest release](https://github.com/ZOONGG/codex-swap-account/releases/latest) ·
-[Report a bug](https://github.com/ZOONGG/codex-swap-account/issues/new?template=bug_report.md) ·
-[Request a feature](https://github.com/ZOONGG/codex-swap-account/issues/new?template=feature_request.md)
+[Download latest release](https://github.com/Vvvv4a40/CodexSwaper/releases/latest) ·
+[Report a bug](https://github.com/Vvvv4a40/CodexSwaper/issues/new?template=bug_report.md) ·
+[Request a feature](https://github.com/Vvvv4a40/CodexSwaper/issues/new?template=feature_request.md)
 
 <p align="center">
   <strong>English</strong> ·   <a href="README_RU.md">Русский</a>
@@ -107,9 +109,9 @@ Create, organize, and manage local Codex profiles.
 
 ## Download
 
-Go to the [latest GitHub release](https://github.com/ZOONGG/codex-swap-account/releases/latest).
+Go to the [latest GitHub release](https://github.com/Vvvv4a40/CodexSwaper/releases/latest).
 
-Current stable release: **v1.0.0** (September 20, 2026).
+Current stable release: **v1.1.0** (October 4, 2026).
 
 Recommended download:
 
@@ -361,7 +363,7 @@ The uninstaller removes the application, its shortcuts, and its startup entry. I
 Clone the repository:
 
 ```powershell
-git clone https://github.com/ZOONGG/codex-swap-account.git
+git clone https://github.com/Vvvv4a40/CodexSwaper.git
 cd codex-swap-account
 ```
 
@@ -464,7 +466,7 @@ Before opening a pull request:
 5. run `.\verify-repository-safety.ps1`;
 6. describe manual UI verification where relevant.
 
-Use [GitHub Issues](https://github.com/ZOONGG/codex-swap-account/issues) for reproducible bugs and focused feature requests.
+Use [GitHub Issues](https://github.com/Vvvv4a40/CodexSwaper/issues) for reproducible bugs and focused feature requests.
 
 ## License
 

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/CodexProfileOverlay.Core/CodexProfileOverlay.Core.csproj" />
+    <Compile Include="../../src/CodexProfileOverlay/DesktopProcessCatalog.cs" Link="Platform/DesktopProcessCatalog.cs" />
+    <Compile Include="../../src/CodexProfileOverlay/CodexWindowFinder.cs" Link="Platform/CodexWindowFinder.cs" />
+    <Compile Include="../../src/CodexProfileOverlay/CodexWindowInfo.cs" Link="Platform/CodexWindowInfo.cs" />
+    <Compile Include="../../src/CodexProfileOverlay/NativeMethods.cs" Link="Platform/NativeMethods.cs" />
+  </ItemGroup>
+</Project>

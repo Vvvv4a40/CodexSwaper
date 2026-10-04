@@ -90,6 +90,7 @@ public sealed class ProfileManagerService
 
         Directory.CreateDirectory(directory);
         string configFile = Path.Combine(directory, "config.toml");
+        PathSafety.RequireRegularPath(configFile);
         if (!File.Exists(configFile))
         {
             File.WriteAllText(configFile, "cli_auth_credentials_store = \"file\"" + Environment.NewLine);
@@ -116,6 +117,8 @@ public sealed class ProfileManagerService
             return false;
         }
 
+        // The root was checked above; .NET removes nested reparse points without following them.
+        PathSafety.RequireInsideRoot(paths.ProfilesDirectory, directory);
         Directory.Delete(directory, recursive: true);
         RemoveMetadata(validName);
         return true;
@@ -184,10 +187,12 @@ public sealed class ProfileManagerService
             throw new DirectoryNotFoundException("Profile directory was not found.");
         }
 
+        PathSafety.RequireRegularPath(paths.RemovedProfilesDirectory);
         Directory.CreateDirectory(paths.RemovedProfilesDirectory);
         string destination = Path.Combine(
             paths.RemovedProfilesDirectory,
             $"{DateTimeOffset.Now:yyyyMMdd-HHmmss}-{validName}");
+        PathSafety.RequireInsideRoot(paths.RemovedProfilesDirectory, destination);
         Directory.Move(source, destination);
 
         ProfileMetadataDocument document = metadataStore.Load();
@@ -276,11 +281,6 @@ public sealed class ProfileManagerService
 
     private void EnsureInsideProfilesRoot(string fullPath)
     {
-        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(paths.ProfilesDirectory)) + Path.DirectorySeparatorChar;
-        string candidate = Path.TrimEndingDirectorySeparator(fullPath) + Path.DirectorySeparatorChar;
-        if (!candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Resolved profile path escapes the profiles directory.");
-        }
+        PathSafety.RequireInsideRoot(paths.ProfilesDirectory, fullPath);
     }
 }

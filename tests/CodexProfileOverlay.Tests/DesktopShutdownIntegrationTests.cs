@@ -8,6 +8,37 @@ namespace CodexProfileOverlay.Tests;
 public sealed class DesktopShutdownIntegrationTests
 {
     [Fact]
+    public async Task StoppedDesktopOperation_RollbackRunsOnlyAfterNewDesktopAndHelpersExit()
+    {
+        using var fixture = new ShutdownFixture();
+        var service = fixture.CreateService(process => process.Terminate());
+        bool restored = false;
+        await StoppedDesktopOperation.RunAsync(service, 1, true, () =>
+        {
+            Assert.True(fixture.Desktop.HasExited);
+            Assert.True(fixture.Helper.HasExited);
+            restored = true;
+        }, CancellationToken.None);
+        Assert.True(restored);
+    }
+
+    [Fact]
+    public async Task StoppedDesktopOperation_SurvivingHelperPreventsRollbackMutation()
+    {
+        using var fixture = new ShutdownFixture();
+        var service = fixture.CreateService(process =>
+        {
+            if (process.Identity.ProcessId == fixture.Helper.Id) { throw new Win32Exception(5); }
+            process.Terminate();
+        });
+        bool restored = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => StoppedDesktopOperation.RunAsync(service, 1, true,
+            () => restored = true, CancellationToken.None));
+        Assert.False(restored);
+        Assert.False(fixture.Helper.HasExited);
+    }
+
+    [Fact]
     public async Task VerifyDesktopStopped_DisposedGuardCannotAuthorizeEvenAnEmptySnapshot()
     {
         using var fixture = new ShutdownFixture();

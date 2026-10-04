@@ -13,6 +13,7 @@ public sealed class ActiveProfileStore
 
     public string? Read()
     {
+        PathSafety.RequireRegularPath(activeProfileFile);
         if (!File.Exists(activeProfileFile))
         {
             return null;
@@ -25,12 +26,14 @@ public sealed class ActiveProfileStore
     public void Write(string profileName)
     {
         string validName = ProfileName.RequireValid(profileName);
+        PathSafety.RequireRegularPath(activeProfileFile);
         string directory = Path.GetDirectoryName(activeProfileFile)!;
         Directory.CreateDirectory(directory);
         string temporaryFile = Path.Combine(directory, $".active-profile-{Guid.NewGuid():N}.tmp");
         File.WriteAllText(temporaryFile, validName, new UTF8Encoding(false));
         try
         {
+            PathSafety.RequireRegularPath(activeProfileFile);
             if (File.Exists(activeProfileFile))
             {
                 File.Replace(temporaryFile, activeProfileFile, null);

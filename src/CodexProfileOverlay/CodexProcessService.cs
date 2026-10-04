@@ -12,6 +12,7 @@ internal sealed class CodexProcessService
     private readonly Func<DesktopProcessSnapshot, string?> executablePath;
     private readonly Action<TrackedDesktopProcess> terminateProcess;
     private readonly HashSet<string> verifiedDesktopPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> verifiedDesktopNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly int sessionId;
 
     public CodexProcessService(SafeLogger logger)
@@ -47,7 +48,11 @@ internal sealed class CodexProcessService
         try
         {
             string? path = executablePath(new DesktopProcessSnapshot(window.ProcessId, 0, sessionId, window.StartTimeUtc));
-            if (!string.IsNullOrWhiteSpace(path)) { verifiedDesktopPaths.Add(Path.GetFullPath(path)); }
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                verifiedDesktopPaths.Add(Path.GetFullPath(path));
+                verifiedDesktopNames.Add(Path.GetFileName(path));
+            }
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
@@ -80,11 +85,15 @@ internal sealed class CodexProcessService
             bool RefreshAndRequestClose()
             {
                 var captured = captureProcesses(sessionId);
+                // Build once per capture: lookup must still compare the process creation time.
+                // ToDictionary also refuses ambiguous duplicate process IDs before any close request.
+                var capturedById = captured.ToDictionary(process => process.Identity.ProcessId);
                 var windows = findWindows();
                 var roots = new HashSet<int>();
                 foreach (var window in windows)
                 {
-                    if (captured.Any(item => item.Identity.ProcessId == window.ProcessId && item.Identity.StartTimeUtc == window.StartTimeUtc))
+                    if (capturedById.TryGetValue(window.ProcessId, out var windowProcess)
+                        && windowProcess.Identity.StartTimeUtc == window.StartTimeUtc)
                     {
                         roots.Add(window.ProcessId);
                     }
@@ -96,7 +105,7 @@ internal sealed class CodexProcessService
                     string file = process.ExecutableName;
                     bool candidate = file.Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase)
                         || file.Equals("Codex.exe", StringComparison.OrdinalIgnoreCase)
-                        || verifiedDesktopPaths.Any(path => Path.GetFileName(path).Equals(file, StringComparison.OrdinalIgnoreCase));
+                        || verifiedDesktopNames.Contains(file);
                     if (!candidate || process.Identity.ProcessId == Environment.ProcessId) { continue; }
                     if (tracked.TryGetValue(process.Identity.ProcessId, out var pinned))
                     {
@@ -124,8 +133,8 @@ internal sealed class CodexProcessService
                     }
                 }
                 desktopProcessIds.UnionWith(roots);
-                bool retrySnapshot = windows.Any(window => !captured.Any(item => item.Identity.ProcessId == window.ProcessId
-                    && item.Identity.StartTimeUtc == window.StartTimeUtc));
+                bool retrySnapshot = windows.Any(window => !capturedById.TryGetValue(window.ProcessId, out var windowProcess)
+                    || windowProcess.Identity.StartTimeUtc != window.StartTimeUtc);
                 // Restore only the exact remembered identities; a recycled PID fails before any shutdown action.
                 var remembered = tracked.Values.Select(process => process.Identity with { ExitTimeUtc = process.ExitTimeUtc }).ToArray();
                 var snapshotIdentities = captured.Select(item =>
@@ -145,14 +154,14 @@ internal sealed class CodexProcessService
                 var selected = DesktopProcessSelector.SelectTree(capturedIdentities, roots, sessionId, Environment.ProcessId);
                 foreach (var identity in selected)
                 {
-                    if (identity.ExitTimeUtc is not null || !captured.Any(item => item.Identity.ProcessId == identity.ProcessId)) { continue; } // Lineage only.
+                    if (identity.ExitTimeUtc is not null || !capturedById.TryGetValue(identity.ProcessId, out var capturedProcess)) { continue; } // Lineage only.
                     if (tracked.TryGetValue(identity.ProcessId, out var previous) && previous.Identity.StartTimeUtc != identity.StartTimeUtc)
                     {
                         throw new InvalidOperationException("Desktop identity changed while shutdown was in progress.");
                     }
                     if (!tracked.ContainsKey(identity.ProcessId))
                     {
-                        string executableName = captured.First(item => item.Identity.ProcessId == identity.ProcessId).ExecutableName;
+                        string executableName = capturedProcess.ExecutableName;
                         var process = DesktopProcessCatalog.Open(identity, executableName);
                         if (process is not null)
                         {
@@ -263,7 +272,7 @@ internal sealed class CodexProcessService
             if (shutdownGuard.IsKnownExitedProcess(process.Identity)) { continue; }
             string file = process.ExecutableName;
             if (!file.Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase) && !file.Equals("Codex.exe", StringComparison.OrdinalIgnoreCase)
-                && !verifiedDesktopPaths.Any(path => Path.GetFileName(path).Equals(file, StringComparison.OrdinalIgnoreCase))) { continue; }
+                && !verifiedDesktopNames.Contains(file)) { continue; }
             string? path = executablePath(process.Identity);
             if (path is not null && (verifiedDesktopPaths.Contains(Path.GetFullPath(path)) || DesktopProcessCatalog.IsInstalledDesktopPath(path)))
             {
@@ -341,7 +350,7 @@ internal sealed class CodexProcessService
             logger.Info("Launching Codex through Start menu AppUserModelID.");
             _ = Process.Start(new ProcessStartInfo
             {
-                FileName = "explorer.exe",
+                FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"),
                 Arguments = $"shell:AppsFolder\\{appId}",
                 UseShellExecute = true,
             }) ?? throw new InvalidOperationException("Could not start Codex through Start menu AppUserModelID.");
@@ -369,19 +378,34 @@ internal sealed class CodexProcessService
         {
             using var process = Process.Start(new ProcessStartInfo
             {
-                FileName = "powershell.exe",
+                FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"),
                 Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"(Get-StartApps | Where-Object { $_.AppID -like 'OpenAI.Codex_2p2nqsd0c76g0!*' } | Select-Object -First 1 -ExpandProperty AppID)\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = false,
                 CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
             });
-
-            string? output = process?.StandardOutput.ReadLine();
-            process?.WaitForExit(3000);
-            return string.IsNullOrWhiteSpace(output) ? null : output.Trim();
+            if (process is null) { return null; }
+            // Read asynchronously before waiting: a blocked read must not bypass the three-second bound.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            Task<string?> outputTask = process.StandardOutput.ReadLineAsync(timeout.Token).AsTask();
+            try
+            {
+                if (!process.WaitForExit(3000) || process.ExitCode != 0) { return null; }
+                string? output = outputTask.GetAwaiter().GetResult()?.Trim();
+                const string familyPrefix = "OpenAI.Codex_2p2nqsd0c76g0!";
+                return output is not null && output.StartsWith(familyPrefix, StringComparison.OrdinalIgnoreCase)
+                    && output.Length > familyPrefix.Length
+                    && output[familyPrefix.Length..].All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '.' or '-')
+                    ? output : null;
+            }
+            finally
+            {
+                if (!process.HasExited) { process.Kill(); }
+            }
         }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or OperationCanceledException or IOException)
         {
             return null;
         }

@@ -1,0 +1,1 @@
+SQLite deliverable code is dedicated to the public domain. Source: https://www.sqlite.org/copyright.html . SQLitePCLRaw.core package 2.1.13: Copyright 2014-2024 SourceGear, LLC; Apache-2.0 license.

@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $repo 'scripts\BuildCommon.ps1')
 if ([string]::IsNullOrWhiteSpace($Source)) {
     $Source = Join-Path $repo "artifacts\publish"
 }
@@ -21,9 +22,21 @@ $shortcutDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $startMenuShortcut = Join-Path $shortcutDir "Codex Profile Overlay.lnk"
 $desktopShortcut = Join-Path ([Environment]::GetFolderPath("DesktopDirectory")) "Codex Profile Overlay.lnk"
 
-Get-Process CodexProfileOverlay -ErrorAction SilentlyContinue | Stop-Process -Force
+foreach ($installPath in @($Source, $installRoot, $startMenuShortcut, $desktopShortcut)) { Assert-NoReparsePointAncestor -Path $installPath }
+Assert-NoReparsePointsInTree -Path $Source
+$installedExe = Join-Path $installRoot 'CodexProfileOverlay.exe'
+$currentSession = (Get-Process -Id $PID).SessionId
+Get-Process CodexProfileOverlay -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.SessionId -eq $currentSession -and $_.Path -eq $installedExe) { Stop-Process -Id $_.Id -Force }
+}
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-Copy-Item -Path (Join-Path $Source "*") -Destination $installRoot -Recurse -Force
+foreach ($installName in @('CodexProfileOverlay.exe', 'LICENSE.txt', 'THIRD_PARTY_NOTICES.txt', 'licenses')) {
+    $installSource = Join-Path $Source $installName
+    $installTarget = Join-Path $installRoot $installName
+    Assert-NoReparsePointAncestor -Path $installTarget
+    if (Test-Path -LiteralPath $installTarget -PathType Container) { Assert-NoReparsePointsInTree -Path $installTarget }
+    if (Test-Path -LiteralPath $installSource) { Copy-Item -LiteralPath $installSource -Destination $installTarget -Recurse -Force }
+}
 
 function New-CodexProfileOverlayShortcut {
     param(

@@ -1,3 +1,5 @@
+> Версия 1.1.0 этого форка: усиленные проверки путей и отката, оптимизация опросов, закреплённые зависимости. Аудит и ограничения: [SECURITY.md](SECURITY.md). Исходный проект: [ZOONGG/codex-swap-account](https://github.com/ZOONGG/codex-swap-account), MIT. Реальное переключение аккаунтов этой версии ещё не проверялось.
+
 <div align="center">
 
 # Codex Swap Account
@@ -6,16 +8,16 @@
 
 Переключайтесь между несколькими аккаунтами Codex через панель прямо в окне приложения — с управлением из трея, глобальными горячими клавишами, общей историей чатов, поддержкой нескольких мониторов и автоматическим откатом при ошибке.
 
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/ZOONGG/codex-swap-account)
+[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/Vvvv4a40/CodexSwaper)
 [![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![Build](https://github.com/ZOONGG/codex-swap-account/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/ZOONGG/codex-swap-account/actions/workflows/windows-ci.yml)
-[![Последний релиз](https://img.shields.io/github/v/release/ZOONGG/codex-swap-account?display_name=tag&sort=semver)](https://github.com/ZOONGG/codex-swap-account/releases/latest)
-[![Лицензия](https://img.shields.io/github/license/ZOONGG/codex-swap-account)](LICENSE)
+[![Build](https://github.com/Vvvv4a40/CodexSwaper/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/Vvvv4a40/CodexSwaper/actions/workflows/windows-ci.yml)
+[![Последний релиз](https://img.shields.io/github/v/release/Vvvv4a40/CodexSwaper?display_name=tag&sort=semver)](https://github.com/Vvvv4a40/CodexSwaper/releases/latest)
+[![Лицензия](https://img.shields.io/github/license/Vvvv4a40/CodexSwaper)](LICENSE)
 [![Без телеметрии](https://img.shields.io/badge/телеметрия-отсутствует-2DD4A3)](#конфиденциальность-и-безопасность)
 
-[Скачать последнюю версию](https://github.com/ZOONGG/codex-swap-account/releases/latest) ·
-[Сообщить об ошибке](https://github.com/ZOONGG/codex-swap-account/issues/new?template=bug_report.md) ·
-[Предложить функцию](https://github.com/ZOONGG/codex-swap-account/issues/new?template=feature_request.md)
+[Скачать последнюю версию](https://github.com/Vvvv4a40/CodexSwaper/releases/latest) ·
+[Сообщить об ошибке](https://github.com/Vvvv4a40/CodexSwaper/issues/new?template=bug_report.md) ·
+[Предложить функцию](https://github.com/Vvvv4a40/CodexSwaper/issues/new?template=feature_request.md)
 
 <p align="center">
   <a href="README.md">English</a> ·
@@ -108,9 +110,9 @@ Codex Swap Account превращает это в одно действие:
 
 ## Скачать
 
-Откройте страницу [последнего релиза](https://github.com/ZOONGG/codex-swap-account/releases/latest).
+Откройте страницу [последнего релиза](https://github.com/Vvvv4a40/CodexSwaper/releases/latest).
 
-Текущий стабильный релиз: **v1.0.0** (20 сентября 2026 года).
+Текущий стабильный релиз: **v1.1.0** (4 октября 2026 года).
 
 Рекомендуемый файл:
 
@@ -362,7 +364,7 @@ Codex Swap Account работает полностью локально.
 Клонирование:
 
 ```powershell
-git clone https://github.com/ZOONGG/codex-swap-account.git
+git clone https://github.com/Vvvv4a40/CodexSwaper.git
 cd codex-swap-account
 ```
 
@@ -463,7 +465,7 @@ artifacts\CodexProfileOverlay-win-x64-portable.zip
 5. запустите `.\verify-repository-safety.ps1`;
 6. укажите, какие ручные проверки интерфейса были выполнены.
 
-Для воспроизводимых ошибок и конкретных предложений используйте [GitHub Issues](https://github.com/ZOONGG/codex-swap-account/issues).
+Для воспроизводимых ошибок и конкретных предложений используйте [GitHub Issues](https://github.com/Vvvv4a40/CodexSwaper/issues).
 
 ## Лицензия
 

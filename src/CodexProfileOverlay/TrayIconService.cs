@@ -36,6 +36,7 @@ internal sealed class TrayIconService : IDisposable
         {
             if (clickCoordinator.TryConsumeDueSingleClick(DateTimeOffset.UtcNow))
             {
+                singleClickTimer.Stop();
                 ToggleOverlayRequested?.Invoke();
             }
         };
@@ -134,7 +135,12 @@ internal sealed class TrayIconService : IDisposable
 
     private void RebuildMenu()
     {
-        menu.Items.Clear();
+        while (menu.Items.Count > 0)
+        {
+            ToolStripItem item = menu.Items[0];
+            menu.Items.RemoveAt(0);
+            item.Dispose();
+        }
         menu.Items.Add(localizer["OpenCodex"], null, (_, _) => OpenCodexRequested?.Invoke());
         menu.Items.Add(overlayVisible ? localizer["HideSwitcher"] : localizer["ShowSwitcher"], null, (_, _) => ToggleOverlayRequested?.Invoke());
 

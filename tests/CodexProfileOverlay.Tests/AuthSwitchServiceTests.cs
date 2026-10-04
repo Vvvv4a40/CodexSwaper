@@ -5,6 +5,53 @@ namespace CodexProfileOverlay.Tests;
 public sealed class AuthSwitchServiceTests
 {
     [Fact]
+    public async Task SwitchAsync_WhenBackupFinalizationFails_RestoresPreviousAuthAndActiveProfile()
+    {
+        using var temp = new TestLayout();
+        temp.AddProfile("current", "old-profile");
+        temp.AddProfile("target", "target-auth");
+        temp.WriteSharedAuth("current-live");
+        temp.ActiveProfileStore.Write("current");
+        var service = temp.CreateSwitchService(new BlockBackupFinalization(temp.Paths));
+
+        await Assert.ThrowsAsync<IOException>(() => service.SwitchAsync("target"));
+
+        Assert.Equal("current-live", temp.ReadSharedAuth());
+        Assert.Equal("current", temp.ActiveProfileStore.Read());
+        Assert.Equal("target-auth", temp.ReadProfileAuth("target"));
+    }
+
+    [Fact]
+    public async Task Rollback_TamperedAuthenticationBackupIsRejectedBeforeWritingSharedAuth()
+    {
+        using var temp = new TestLayout();
+        temp.AddProfile("current", "old-profile");
+        temp.AddProfile("target", "target-auth");
+        temp.WriteSharedAuth("current-live");
+        temp.ActiveProfileStore.Write("current");
+        var service = temp.CreateSwitchService();
+        var result = await service.SwitchAsync("target");
+        File.WriteAllText(Path.Combine(result.BackupPath!, "previous-auth.json"), "tampered");
+
+        Assert.Throws<InvalidDataException>(() => service.Rollback(result));
+        Assert.Equal("target-auth", temp.ReadSharedAuth());
+        Assert.Equal("target", temp.ActiveProfileStore.Read());
+    }
+
+    private sealed class BlockBackupFinalization(AppPaths paths) : IAtomicFileReplacer
+    {
+        private readonly AtomicFileReplacer inner = new();
+        public void ReplaceFromSource(string sourceFile, string destinationFile)
+        {
+            inner.ReplaceFromSource(sourceFile, destinationFile);
+            if (!destinationFile.Equals(paths.SharedAuthFile, StringComparison.OrdinalIgnoreCase)) { return; }
+            string transaction = Assert.Single(Directory.GetDirectories(paths.BackupDirectory, "txn-*"));
+            string collision = Path.Combine(paths.BackupDirectory, "completed-" + Path.GetFileName(transaction)[4..]);
+            Directory.CreateDirectory(collision);
+        }
+    }
+
+    [Fact]
     public async Task SwitchAsync_CopiesCurrentAuthBackAndInstallsTarget()
     {
         using var temp = new TestLayout();

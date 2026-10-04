@@ -22,6 +22,7 @@ internal sealed class OverlayController : IDisposable
     private readonly DispatcherTimer timer;
     private readonly AppPaths paths;
     private readonly OverlayVisibilityState visibilityState = new();
+    private readonly MonotonicPollGate usagePollGate = new(TimeSpan.FromSeconds(15));
     private readonly CancellationTokenSource disposalTokenSource = new();
     private readonly Dictionary<string, ProfileLoginAttempt> activeProfileLogins = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> lastUsageRefreshAttempts = new(StringComparer.OrdinalIgnoreCase);
@@ -259,6 +260,7 @@ internal sealed class OverlayController : IDisposable
 
     private void RefreshProfiles()
     {
+        usagePollGate.Reset();
         try
         {
             profileManager.EnsureMetadata();
@@ -329,10 +331,10 @@ internal sealed class OverlayController : IDisposable
 
             bool allowForceClose = settings.ForceCloseFallback;
             shutdownGuard = await processService.CloseCodexAsync(settings.GracefulCloseTimeoutSeconds, allowForceClose, disposalTokenSource.Token).ConfigureAwait(true);
-            MigrateLegacyProfileStateSafely();
+            await Task.Run(MigrateLegacyProfileStateSafely, disposalTokenSource.Token).ConfigureAwait(true);
             processService.VerifyDesktopStopped(shutdownGuard);
             authorizationStarted = true;
-            switchResult = await switchService.SwitchAsync(profileName, disposalTokenSource.Token).ConfigureAwait(true);
+            switchResult = await Task.Run(() => switchService.SwitchAsync(profileName, disposalTokenSource.Token), disposalTokenSource.Token).ConfigureAwait(true);
             RefreshProfiles();
             if (settings.LaunchCodexAfterSwitching)
             {
@@ -348,7 +350,8 @@ internal sealed class OverlayController : IDisposable
             {
                 try
                 {
-                    switchService.Rollback(switchResult);
+                    await StoppedDesktopOperation.RunAsync(processService, settings.GracefulCloseTimeoutSeconds,
+                        settings.ForceCloseFallback, () => switchService.Rollback(switchResult), CancellationToken.None).ConfigureAwait(true);
                     authorizationRestored = true;
                     RefreshProfiles();
                 }
@@ -737,6 +740,7 @@ internal sealed class OverlayController : IDisposable
 
     private void SaveSettings(OverlaySettings updatedSettings)
     {
+        usagePollGate.Reset();
         try
         {
             settings = updatedSettings;
@@ -775,6 +779,7 @@ internal sealed class OverlayController : IDisposable
 
     private void RefreshStatusIndicators()
     {
+        usagePollGate.Reset();
         ProfileStatusDocument statusDocument = statusService.Load();
         string? recommendedProfile = settings.ShowAutomaticLimitIndicators
             ? statusService.FindRecommendedProfile(profiles.Select(profile => profile.Name).ToArray(), statusDocument)
@@ -806,6 +811,8 @@ internal sealed class OverlayController : IDisposable
         if (automaticUsageRefreshRunning
             || switching
             || profiles.Count == 0
+            || !settings.ShowAutomaticLimitIndicators
+            || !usagePollGate.TryEnter()
             || !UsageRefreshPolicy.AllowsAutomaticRefresh(settings, statusService.ProviderCapability))
         {
             return;

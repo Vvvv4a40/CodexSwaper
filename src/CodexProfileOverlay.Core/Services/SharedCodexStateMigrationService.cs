@@ -31,14 +31,18 @@ public sealed class SharedCodexStateMigrationService
     public SharedCodexStateMigrationResult MigrateLegacyProfileState()
     {
         string markerFile = Path.Combine(paths.ApplicationDataDirectory, MigrationMarkerFileName);
+        PathSafety.RequireRegularPath(markerFile);
         if (File.Exists(markerFile))
         {
             return SharedCodexStateMigrationResult.AlreadyCompleted;
         }
 
+        PathSafety.RequireRegularPath(paths.SharedCodexDirectory);
+        PathSafety.RequireRegularPath(paths.ProfilesDirectory);
         Directory.CreateDirectory(paths.SharedCodexDirectory);
         string[] legacyStateDirectories = Directory.Exists(paths.ProfilesDirectory)
             ? Directory.EnumerateDirectories(paths.ProfilesDirectory)
+                .Where(static profileDirectory => !PathSafety.IsReparsePoint(profileDirectory))
                 .Select(profileDirectory => Path.Combine(profileDirectory, LegacyStateDirectoryName))
                 .Where(Directory.Exists)
                 .ToArray()
@@ -48,6 +52,7 @@ public sealed class SharedCodexStateMigrationService
         int importedThreads = 0;
         foreach (string legacyStateDirectory in legacyStateDirectories)
         {
+            PathSafety.RequireInsideRoot(paths.ProfilesDirectory, legacyStateDirectory);
             foreach (string directoryName in SharedDirectories)
             {
                 copiedFiles += CopyMissingFiles(
@@ -95,6 +100,8 @@ public sealed class SharedCodexStateMigrationService
 
     private static int MergeDatabase(string targetDatabase, string sourceDatabase)
     {
+        PathSafety.RequireRegularPath(targetDatabase);
+        PathSafety.RequireRegularPath(sourceDatabase);
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = targetDatabase,
@@ -177,12 +184,14 @@ public sealed class SharedCodexStateMigrationService
     private int MergeSessionIndex(string legacyStateDirectory)
     {
         string source = Path.Combine(legacyStateDirectory, "session_index.jsonl");
+        PathSafety.RequireRegularPath(source);
         if (!File.Exists(source))
         {
             return 0;
         }
 
         string destination = Path.Combine(paths.SharedCodexDirectory, "session_index.jsonl");
+        PathSafety.RequireInsideRoot(paths.SharedCodexDirectory, destination);
         var existing = File.Exists(destination)
             ? File.ReadLines(destination).Where(static line => !string.IsNullOrWhiteSpace(line)).ToHashSet(StringComparer.Ordinal)
             : new HashSet<string>(StringComparer.Ordinal);
@@ -202,24 +211,37 @@ public sealed class SharedCodexStateMigrationService
 
     private static int CopyMissingFiles(string sourceDirectory, string destinationDirectory)
     {
+        PathSafety.RequireRegularPath(sourceDirectory);
+        PathSafety.RequireRegularPath(destinationDirectory);
         if (!Directory.Exists(sourceDirectory))
         {
             return 0;
         }
 
         int copiedFiles = 0;
-        foreach (string sourceFile in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+        var pending = new Stack<string>();
+        pending.Push(sourceDirectory);
+        while (pending.Count > 0)
         {
-            string relativePath = Path.GetRelativePath(sourceDirectory, sourceFile);
-            string destinationFile = Path.Combine(destinationDirectory, relativePath);
-            if (File.Exists(destinationFile))
+            string current = pending.Pop();
+            PathSafety.RequireInsideRoot(sourceDirectory, current, allowRoot: true);
+            foreach (string sourceFile in Directory.EnumerateFiles(current, "*", SearchOption.TopDirectoryOnly))
             {
-                continue;
-            }
+                if (PathSafety.IsReparsePoint(sourceFile)) { continue; }
+                PathSafety.RequireInsideRoot(sourceDirectory, sourceFile);
+                string relativePath = Path.GetRelativePath(sourceDirectory, sourceFile);
+                string destinationFile = PathSafety.RequireInsideRoot(destinationDirectory, Path.Combine(destinationDirectory, relativePath));
+                if (File.Exists(destinationFile)) { continue; }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
-            File.Copy(sourceFile, destinationFile, overwrite: false);
-            copiedFiles++;
+                Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
+                PathSafety.RequireRegularPath(destinationFile);
+                File.Copy(sourceFile, destinationFile, overwrite: false);
+                copiedFiles++;
+            }
+            foreach (string child in Directory.EnumerateDirectories(current, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (!PathSafety.IsReparsePoint(child)) { pending.Push(child); }
+            }
         }
 
         return copiedFiles;
@@ -231,9 +253,13 @@ public sealed class SharedCodexStateMigrationService
             .FirstOrDefault();
 
     private static IEnumerable<string> EnumerateStateDatabases(string directory)
-        => Directory.Exists(directory)
+    {
+        PathSafety.RequireRegularPath(directory);
+        return Directory.Exists(directory)
             ? Directory.EnumerateFiles(directory, "state_*.sqlite", SearchOption.TopDirectoryOnly)
+                .Where(static file => !PathSafety.IsReparsePoint(file))
             : [];
+    }
 
     private static int GetStateDatabaseVersion(string path)
     {

@@ -49,7 +49,7 @@ public sealed class CodexAppServerRateLimitsSource : ICodexRateLimitsSource
             return null;
         }
 
-        string fullProfileDirectory = Path.GetFullPath(profileDirectory);
+        string fullProfileDirectory = PathSafety.RequireRegularPath(profileDirectory);
         Directory.CreateDirectory(fullProfileDirectory);
         for (int attempt = 0; attempt < 2; attempt++)
         {
@@ -79,21 +79,22 @@ public sealed class CodexAppServerRateLimitsSource : ICodexRateLimitsSource
         };
 
         process.Start();
-        Task<string> stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        var outputReader = new BoundedLineReader(process.StandardOutput, 256 * 1024);
+        Task stderrTask = DrainErrorAsync(process.StandardError);
         try
         {
             await WriteMessageAsync(
                 process.StandardInput,
                 "{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-profile-overlay\",\"version\":\"1\"}}}",
                 cancellationToken).ConfigureAwait(false);
-            if (await ReadResponseAsync(process.StandardOutput, 1, cancellationToken).ConfigureAwait(false) is null)
+            if (await ReadResponseAsync(outputReader, 1, cancellationToken).ConfigureAwait(false) is null)
             {
                 return null;
             }
 
             await WriteMessageAsync(process.StandardInput, "{\"method\":\"initialized\"}", cancellationToken).ConfigureAwait(false);
             await WriteMessageAsync(process.StandardInput, "{\"id\":2,\"method\":\"account/rateLimits/read\"}", cancellationToken).ConfigureAwait(false);
-            string? response = await ReadResponseAsync(process.StandardOutput, 2, cancellationToken).ConfigureAwait(false);
+            string? response = await ReadResponseAsync(outputReader, 2, cancellationToken).ConfigureAwait(false);
             return response is null
                 ? null
                 : new CodexRateLimitsCapture(response, DateTimeOffset.UtcNow, null);
@@ -113,8 +114,14 @@ public sealed class CodexAppServerRateLimitsSource : ICodexRateLimitsSource
             }
 
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            _ = await stderrTask.ConfigureAwait(false);
+            await stderrTask.ConfigureAwait(false);
         }
+    }
+
+    private static async Task DrainErrorAsync(StreamReader reader)
+    {
+        char[] buffer = new char[4096];
+        while (await reader.ReadAsync(buffer.AsMemory(), CancellationToken.None).ConfigureAwait(false) > 0) { }
     }
 
     private static ProcessStartInfo CreateStartInfo(string executable, string profileDirectory)
@@ -140,10 +147,12 @@ public sealed class CodexAppServerRateLimitsSource : ICodexRateLimitsSource
         await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<string?> ReadResponseAsync(StreamReader reader, int expectedId, CancellationToken cancellationToken)
+    private static async Task<string?> ReadResponseAsync(BoundedLineReader bounded, int expectedId, CancellationToken cancellationToken)
     {
-        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        for (int message = 0; message < 128; message++)
         {
+            string? line = await bounded.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null) { return null; }
             try
             {
                 using JsonDocument document = JsonDocument.Parse(line);
@@ -188,7 +197,11 @@ public static class CodexCliLocator
 
         foreach (string directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            string candidate = Path.Combine(directory, "codex.exe");
+            // Relative PATH entries resolve against an arbitrary working directory and can hijack CLI execution.
+            if (!Path.IsPathFullyQualified(directory)) { continue; }
+            string candidate;
+            try { candidate = Path.GetFullPath(Path.Combine(directory, "codex.exe")); }
+            catch (ArgumentException) { continue; }
             if (File.Exists(candidate))
             {
                 return candidate;

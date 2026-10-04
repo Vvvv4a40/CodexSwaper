@@ -7,10 +7,14 @@ internal sealed class CodexWindowFinder
 {
     private readonly SafeLogger logger;
     private readonly int currentProcessId = Environment.ProcessId;
+    private readonly int sessionId;
+    private readonly DesktopExecutableIdentityCache verifiedExecutables = new();
 
     public CodexWindowFinder(SafeLogger logger)
     {
         this.logger = logger;
+        using Process currentProcess = Process.GetCurrentProcess();
+        sessionId = currentProcess.SessionId;
     }
 
     public CodexWindowInfo? FindMainWindow()
@@ -54,7 +58,8 @@ internal sealed class CodexWindowFinder
         try
         {
             using Process process = Process.GetProcessById(knownWindow.ProcessId);
-            if (process.StartTime.ToUniversalTime() != knownWindow.StartTimeUtc || !IsLikelyOfficialCodexProcess(process)) { return null; }
+            if (process.SessionId != sessionId || process.StartTime.ToUniversalTime() != knownWindow.StartTimeUtc
+                || !IsLikelyOfficialCodexProcess(process)) { return null; }
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
@@ -111,8 +116,7 @@ internal sealed class CodexWindowFinder
         {
             using Process process = Process.GetProcessById((int)processId);
             string title = NativeMethods.GetWindowTitle(hwnd);
-            using Process currentProcess = Process.GetCurrentProcess();
-            if (process.SessionId != currentProcess.SessionId || !IsLikelyOfficialCodexProcess(process))
+            if (process.SessionId != sessionId || !IsLikelyOfficialCodexProcess(process))
             {
                 return null;
             }
@@ -136,7 +140,7 @@ internal sealed class CodexWindowFinder
         return result == 0 && cloaked != 0;
     }
 
-    private static bool IsLikelyOfficialCodexProcess(Process process)
+    private bool IsLikelyOfficialCodexProcess(Process process)
     {
         if (!process.ProcessName.Equals("Codex", StringComparison.OrdinalIgnoreCase)
             && !process.ProcessName.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase))
@@ -146,12 +150,34 @@ internal sealed class CodexWindowFinder
 
         try
         {
-            string? path = process.MainModule?.FileName;
-            return path is not null && DesktopProcessCatalog.IsInstalledDesktopPath(path);
+            DateTime started = process.StartTime.ToUniversalTime();
+            return verifiedExecutables.GetOrVerify(process.Id, started, process.ProcessName,
+                () => DesktopProcessCatalog.ExecutablePath(new DesktopProcessSnapshot(process.Id, 0, sessionId, started)));
         }
         catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return false;
         }
+    }
+}
+
+// Only successful package validation is cached. Every caller rechecks the HWND owner,
+// session and exact process creation time, so a reused PID cannot inherit this decision.
+internal sealed class DesktopExecutableIdentityCache
+{
+    private const int MaximumEntries = 128;
+    private readonly Dictionary<int, DateTime> verified = new();
+
+    public bool GetOrVerify(int processId, DateTime startTimeUtc, string processName, Func<string?> executablePath)
+    {
+        if (!processName.Equals("Codex", StringComparison.OrdinalIgnoreCase)
+            && !processName.Equals("ChatGPT", StringComparison.OrdinalIgnoreCase)) { return false; }
+        if (verified.TryGetValue(processId, out DateTime started) && started == startTimeUtc) { return true; }
+        verified.Remove(processId);
+        string? path = executablePath();
+        if (path is null || !DesktopProcessCatalog.IsInstalledDesktopPath(path)) { return false; }
+        if (verified.Count >= MaximumEntries) { verified.Clear(); }
+        verified.Add(processId, startTimeUtc);
+        return true;
     }
 }
