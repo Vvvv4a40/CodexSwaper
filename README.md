@@ -57,7 +57,7 @@ The app runs quietly in the system tray and only shows the overlay when a verifi
 | **Compact and expanded modes** | Use a minimal dropdown or a one-click segmented profile bar. |
 | **Safe transaction** | Back up the active authorization and automatically roll back if switching fails. |
 | **Multi-monitor ready** | The overlay follows Codex across monitors, window moves, resizes, and DPI changes. |
-| **Local only** | No telemetry, no cloud sync, no reverse proxy, and no credential upload. |
+| **Local profile storage** | No switcher telemetry or cloud profile sync; login and usage checks invoke the Codex CLI, which may contact OpenAI. |
 | **Tray companion** | Launch Codex, show/hide the overlay, manage profiles, and change settings from the tray. |
 | **Bilingual UI** | English and Russian interface support. |
 | **No admin rights** | Runs per-user and does not require a Windows service. |
@@ -281,17 +281,19 @@ The tray process stays alive when Codex is closed or minimized and automatically
 
 ## Privacy and security
 
-Codex Swap Account is designed to operate entirely on the local machine.
+Codex Swap Account stores profiles and application data locally and has no telemetry of its own. Login and usage checks invoke the Codex CLI, which may connect to OpenAI and use the selected account's credentials.
 
 - no telemetry;
 - no analytics;
 - no remote account database;
-- no credential upload;
+- no credential upload by the switcher itself;
 - no browser-cookie export;
 - no reverse proxy;
 - no Windows service;
 - no administrator privileges;
-- no parsing, printing, or logging of `auth.json` contents.
+- no display or logging of `auth.json` contents.
+
+The switcher reads, hashes and copies authorization files for profile switching, backups and rollback. It does not parse the account token fields for display. These files contain credentials and remain unencrypted on disk.
 
 Local application data is stored under:
 
@@ -299,7 +301,7 @@ Local application data is stored under:
 %LOCALAPPDATA%\CodexProfileOverlay
 ```
 
-This may contain non-secret settings, logs, backups, profile display metadata, and removed-profile backups.
+This contains settings, logs and profile display metadata. Authorization backups and removed-profile archives may also contain plaintext credentials: treat those folders as sensitive, even though ordinary settings are non-secret. The program inherits filesystem access controls and does not enforce encrypted storage or restrictive ACLs.
 
 Read the complete security policy in [SECURITY.md](SECURITY.md).
 
@@ -364,7 +366,7 @@ Clone the repository:
 
 ```powershell
 git clone https://github.com/Vvvv4a40/CodexSwaper.git
-cd codex-swap-account
+cd CodexSwaper
 ```
 
 Run tests:

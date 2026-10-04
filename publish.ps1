@@ -43,6 +43,8 @@ Push-Location $repo
 try {
     & $dotnet restore (Join-Path $repo 'CodexProfileOverlay.sln') --locked-mode --configfile (Join-Path $repo 'NuGet.Config')
     if ($LASTEXITCODE -ne 0) { throw "Locked restore failed ($LASTEXITCODE)." }
+    # SelfContained/PublishSingleFile are project properties, so locked restore
+    # also acquires the deployment runtime and SDK analyzer on a clean machine.
     & $dotnet publish (Join-Path $repo 'src\CodexProfileOverlay\CodexProfileOverlay.csproj') `
         -c $Configuration -r win-x64 --self-contained true --no-restore `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `

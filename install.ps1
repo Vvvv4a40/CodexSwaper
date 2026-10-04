@@ -35,7 +35,14 @@ foreach ($installName in @('CodexProfileOverlay.exe', 'LICENSE.txt', 'THIRD_PART
     $installTarget = Join-Path $installRoot $installName
     Assert-NoReparsePointAncestor -Path $installTarget
     if (Test-Path -LiteralPath $installTarget -PathType Container) { Assert-NoReparsePointsInTree -Path $installTarget }
-    if (Test-Path -LiteralPath $installSource) { Copy-Item -LiteralPath $installSource -Destination $installTarget -Recurse -Force }
+    if (Test-Path -LiteralPath $installSource -PathType Container) {
+        New-Item -ItemType Directory -Path $installTarget -Force | Out-Null
+        Get-ChildItem -LiteralPath $installSource -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $installTarget -Recurse -Force
+        }
+    } elseif (Test-Path -LiteralPath $installSource -PathType Leaf) {
+        Copy-Item -LiteralPath $installSource -Destination $installTarget -Force
+    }
 }
 
 function New-CodexProfileOverlayShortcut {
